@@ -42,115 +42,118 @@ class LCTLogger:
     self.csv_file = None
     self.csv_writer = None
 
-  def update(self, world, signs_data, webcam_frame=None):
-    if world.player is None or self.completed:
-      return
+  def update(self, world, signs_data, webcam_frame=None, lane_event='None'):
+        if world.player is None or self.completed:
+            return
 
-    p_trans = world.player.get_transform()
-    p_vel = world.player.get_velocity()
-    p_ctrl = world.player.get_control()
+        p_trans = world.player.get_transform()
+        p_vel = world.player.get_velocity()
+        p_ctrl = world.player.get_control()
 
-    cur_x = p_trans.location.x
-    raw_y = p_trans.location.y
-    y_norm = raw_y + 1.5  # Normalisiertes Y (0.0m bis 10.5m)
-    speed_kmh = 3.6 * math.sqrt(p_vel.x**2 + p_vel.y**2 + p_vel.z**2)
-    current_time = time.time()
+        cur_x = p_trans.location.x
+        raw_y = p_trans.location.y
+        y_norm = raw_y + 7.55  # Normalisiertes Y nach Variante B (Unterkante = 0.0m)
+        speed_kmh = 3.6 * math.sqrt(p_vel.x**2 + p_vel.y**2 + p_vel.z**2)
+        current_time = time.time()
 
-    # --- 1. STARTLINIE BERÜHRT (X >= 0.0) ---
-    if not self.is_recording and cur_x >= self.start_x:
-      self.is_recording = True
-      self.start_time = current_time
+        # --- 1. STARTLINIE BERÜHRT (X >= 0.0) ---
+        if not self.is_recording and cur_x >= self.start_x:
+            self.is_recording = True
+            self.start_time = current_time
 
-      filename = f'LCT_Log_{int(self.start_time)}.csv'
-      self.csv_file = open(filename, mode='w', newline='')
-      self.csv_writer = csv.writer(self.csv_file)
+            filename = f'LCT_Log_{int(self.start_time)}.csv'
+            self.csv_file = open(filename, mode='w', newline='')
+            self.csv_writer = csv.writer(self.csv_file)
 
-      # CSV Header inklusive Gaze- und AOI-Feldern
-      self.csv_writer.writerow([
-          'timestamp_sim',
-          'elapsed_time_s',
-          'pos_x',
-          'pos_y_raw',
-          'pos_y_norm',
-          'speed_kmh',
-          'steer',
-          'active_sign_idx',
-          'active_maneuver',
-          'dist_to_next_sign',
-          'gaze_x',
-          'gaze_y',
-          'aoi_focus',
-          'line_type',
-      ])
+            # CSV Header
+            self.csv_writer.writerow([
+                'timestamp_sim',
+                'elapsed_time_s',
+                'pos_x',
+                'pos_y_raw',
+                'pos_y_norm',
+                'speed_kmh',
+                'steer',
+                'active_sign_idx',
+                'active_maneuver',
+                'dist_to_next_sign',
+                'gaze_x',
+                'gaze_y',
+                'aoi_focus',
+                'line_type',
+            ])
 
-      world.hud.notification(
-          '=== STARTLINIE ÜBERFAHREN: LOGGING GESTARTET ==='
-      )
-      print(
-          f'[LCT LOG] Startlinie bei X={cur_x:.2f}m überfahren. Messung'
-          ' gestartet!'
-      )
+            world.hud.notification('=== STARTLINIE ÜBERFAHREN: LOGGING GESTARTET ===')
+            print(f'[LCT LOG] Startlinie bei X={cur_x:.2f}m überfahren. Messung gestartet!')
 
-    # --- 2. ZIELLINIE BERÜHRT (X >= 3000.0) ---
-    elif self.is_recording and cur_x >= self.finish_x:
-      self.is_recording = False
-      self.completed = True
-      self.total_time = current_time - self.start_time
+        # --- 2. ZIELLINIE BERÜHRT (X >= 3000.0) ---
+        elif self.is_recording and cur_x >= self.finish_x:
+            self.is_recording = False
+            self.completed = True
+            self.total_time = current_time - self.start_time
 
-      self.close()
+            self.close()
 
-      world.hud.notification(
-          f'=== ZIEL ERREICHT! Zeit: {self.total_time:.2f}s ==='
-      )
-      print(
-          f'[LCT LOG] Ziellinie bei X={cur_x:.2f}m erreicht!'
-          f' Gesamtzeit: {self.total_time:.2f}s'
-      )
+            world.hud.notification(f'=== ZIEL ERREICHT! Zeit: {self.total_time:.2f}s ===')
+            print(f'[LCT LOG] Ziellinie bei X={cur_x:.2f}m erreicht! Gesamtzeit: {self.total_time:.2f}s')
 
-    # --- 3. DATEN SCHREIBEN (Während Messung aktiv ist) ---
-    if self.is_recording and self.csv_writer:
-      active_idx = -1
-      active_maneuver = 'None'
-      dist_to_next = 999.0
+        # --- 3. DATEN SCHREIBEN (Während Messung aktiv ist) ---
+        if self.is_recording and self.csv_writer:
+            active_idx = -1
+            active_maneuver = 'None'
+            dist_to_next = 999.0
 
-      for idx, sign in enumerate(signs_data):
-        if isinstance(sign, dict):
-            sign_x = sign.get('x_pos', sign.get('x', 0.0))
-            maneuver = sign.get('maneuver', 'Unknown')
-        else:
-            _, sign_x, maneuver = sign
+            # Nächstes/Aktives Schild in Fahrtrichtung ermitteln
+            for idx, item in enumerate(signs_data):
+                if isinstance(item, str):
+                    sign_x = (idx + 1) * 150.0
+                    maneuver = item
+                elif isinstance(item, dict):
+                    sign_x = item.get('x_pos', item.get('x', (idx + 1) * 150.0))
+                    maneuver = item.get('maneuver', 'Unknown')
+                elif isinstance(item, (tuple, list)):
+                    sign_x = item[1]
+                    maneuver = item[2]
+                else:
+                    continue
 
-      # Linientyp anhand der empirischen Y-Grenzen
-      line_type = 'Solid' if (raw_y <= -7.3 or raw_y >= 3.8) else 'Broken'
-      elapsed_s = current_time - self.start_time
+                if sign_x > cur_x:
+                    active_idx = idx
+                    active_maneuver = maneuver
+                    dist_to_next = sign_x - cur_x
+                    break
 
-      # EyeTrax Gaze & AOI Bestimmung
-      gaze_x, gaze_y = -1.0, -1.0
-      aoi_focus = 'UNKNOWN'
+            # Linientyp aus dem LaneInvasionEvent übernehmen
+            line_type = lane_event
+            elapsed_s = current_time - self.start_time
 
-      if self.gaze_estimator and webcam_frame is not None:
-        try:
-          gaze_x, gaze_y = self.gaze_estimator.predict(webcam_frame)
-          aoi_focus = classify_aoi(gaze_x, gaze_y, self.aoi_threshold_y)
-        except Exception:
-          pass
+            # EyeTrax Gaze & AOI Bestimmung
+            gaze_x, gaze_y = -1.0, -1.0
+            aoi_focus = 'UNKNOWN'
 
-      self.csv_writer.writerow([
-          round(world.hud.simulation_time, 3),
-          round(elapsed_s, 3),
-          round(cur_x, 3),
-          round(raw_y, 3),
-          round(y_norm, 3),
-          round(speed_kmh, 2),
-          round(p_ctrl.steer, 4),
-          active_idx,
-          active_maneuver,
-          round(dist_to_next, 2),
-          round(gaze_x, 1) if gaze_x != -1.0 else -1,
-          round(gaze_y, 1) if gaze_y != -1.0 else -1,
-          aoi_focus,
-          line_type,
-      ])
+            if self.gaze_estimator and webcam_frame is not None:
+                try:
+                    gaze_x, gaze_y = self.gaze_estimator.predict(webcam_frame)
+                    aoi_focus = classify_aoi(gaze_x, gaze_y, self.aoi_threshold_y)
+                except Exception:
+                    pass
+
+            self.csv_writer.writerow([
+                round(world.hud.simulation_time, 3),
+                round(elapsed_s, 3),
+                round(cur_x, 3),
+                round(raw_y, 3),
+                round(y_norm, 3),
+                round(speed_kmh, 2),
+                round(p_ctrl.steer, 4),
+                active_idx,
+                active_maneuver,
+                round(dist_to_next, 2),
+                round(gaze_x, 1) if gaze_x != -1.0 else -1,
+                round(gaze_y, 1) if gaze_y != -1.0 else -1,
+                aoi_focus,
+                line_type,
+            ])
 
   def close(self):
     if self.csv_file is not None:
